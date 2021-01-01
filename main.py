@@ -3,6 +3,7 @@ import logging
 import os
 import threading
 import time
+import typing
 
 from pyvesync import VeSync
 from Quartz import CGEventSourceCounterForEventType, kCGEventSourceStateCombinedSessionState, kCGKeyboardEventKeyboardType
@@ -30,8 +31,13 @@ logger = logging.getLogger(__name__)
 
 
 class OfficeBusyStatusBarUI(rumps.App):
+    """
+    Provide user interface on the OS X status bar. User can make the busy light stay on, return to auto mode, and
+    quit the program.
+    """
     def __init__(self):
         super().__init__("Busy Sign")
+        # Disable the default quit action, because we provide a custom one in the "quit" method below.
         self.quit_button = None
 
     @rumps.clicked("Auto")
@@ -50,7 +56,7 @@ class OfficeBusyStatusBarUI(rumps.App):
 
     @rumps.clicked("Quit")
     def quit(self, sender):
-        # Turn the light off when exiting
+        # Custom quit method so we turn the light off when exiting
         logger.info('Quitting from UI')
         set_light_state(power_on=False)
         rumps.quit_application(sender)
@@ -74,9 +80,56 @@ def set_light_state(power_on: bool) -> None:
         logger.info('Turning light off')
 
 
-def keep_checking_if_busy():
-    # Initialize variables
-    last_keypress_count: int = None
+def is_busy_from_keypresses(last_keypress_count: typing.Optional[int]) -> typing.Tuple[bool, int]:
+    """
+    Check if user is considered busy due to having enough keypresses since the last update.
+
+    :param last_keypress_count: The keypress count when we last checked (for comparison to current value)
+    :return: a tuple like (is_busy, keypress_count)
+    """
+    keypress_count = CGEventSourceCounterForEventType(kCGEventSourceStateCombinedSessionState,
+                                                      kCGKeyboardEventKeyboardType)
+    if last_keypress_count:
+        keypress_diff = keypress_count - last_keypress_count
+        if keypress_diff >= MIN_NEW_KEYPRESS_COUNT:
+            logger.info(f'Busy due to keypresses ({keypress_diff} new keypresses)')
+            return True, keypress_count
+    return False, keypress_count
+
+
+def is_busy_from_zoom() -> bool:
+    """
+    Check if user is considered busy due to zoom being open.
+    """
+    zoom_is_running = 'zoom.us' in (p.info['name'] for p in psutil.process_iter(['name']))
+    if zoom_is_running:
+        logger.info('Busy due to running Zoom application')
+        return True
+    return False
+
+
+def is_busy_from_ui(last_state: bool) -> bool:
+    """
+    Check if user is considered busy due to "stay on" being enabled in the user interface.
+
+    :param last_state: should be True if the user was busy due to "stay on" on the last update. In this case, we leave
+    the light on until the user sets it back to "automatic".
+    """
+    if queue.empty() and last_state:
+        return True
+
+    if not queue.empty():
+        stay_on = queue.get()
+        queue.task_done()
+        if stay_on:
+            logger.info('Busy due to manual activation')
+            return True
+
+    return False
+
+
+def keep_checking_if_busy() -> None:
+    last_keypress_count: typing.Optional[int] = None
     light_is_on: bool = False
     busy_from_ui: bool = False
 
@@ -85,31 +138,11 @@ def keep_checking_if_busy():
 
     # Main loop. It's an infinite loop since we run it as a daemon.
     while True:
-        busy = False
+        busy_from_ui = is_busy_from_ui(busy_from_ui)
+        busy_from_zoom = is_busy_from_zoom()
+        busy_from_keypresses, last_keypress_count = is_busy_from_keypresses(last_keypress_count)
 
-        # check if busy due to keypresses
-        keypress_count = CGEventSourceCounterForEventType(kCGEventSourceStateCombinedSessionState,
-                                                          kCGKeyboardEventKeyboardType)
-        if last_keypress_count:
-            keypress_diff = keypress_count - last_keypress_count
-            if keypress_diff >= MIN_NEW_KEYPRESS_COUNT:
-                logger.info(f'Busy due to keypresses ({keypress_diff} new keypresses)')
-                busy = True
-        last_keypress_count = keypress_count
-
-        # check if busy due to zoom being open
-        zoom_is_running = 'zoom.us' in (p.info['name'] for p in psutil.process_iter(['name']))
-        if zoom_is_running:
-            logger.info('Busy due to running Zoom application')
-            busy = True
-
-        # check if busy due to manual activation
-        if not queue.empty():
-            busy_from_ui = queue.get()
-            queue.task_done()
-        if busy_from_ui:
-            busy = True
-            logger.info('Busy due to manual activation')
+        busy = busy_from_ui or busy_from_zoom or busy_from_keypresses
 
         # turn the light on or off if needed
         if busy and not light_is_on:
