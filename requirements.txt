@@ -7,5 +7,6 @@ pyobjc-framework-Cocoa==7.1
 pyobjc-framework-Quartz==7.1
 pyvesync==1.2.1
 requests==2.25.1
+rumps==0.3.0
 six==1.15.0
 urllib3==1.26.2
