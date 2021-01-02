@@ -15,10 +15,10 @@ import rumps
 # Settings
 
 # How many new keypresses since last update are required to be considered busy?
-MIN_NEW_KEYPRESS_COUNT = 40
+MIN_NEW_KEYPRESS_COUNT = 240
 
 # How often should we update to see if we're busy (in seconds)?
-UPDATE_INTERVAL = 10
+UPDATE_INTERVAL = 60
 
 # VEsync credentials (WiFi power outlet)
 VESYNC_EMAIL = os.environ.get('VESYNC_EMAIL')
